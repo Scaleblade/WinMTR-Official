@@ -41,7 +41,7 @@ Use `Win32` instead of `x64` to build the 32-bit application. Build artifacts ar
 
 The **Windows CI** workflow runs on pull requests targeting `main` and can be run manually from the Actions tab once it is on the default branch. It does not run on pushes or a schedule. It uses standard GitHub-hosted `windows-2025-vs2026` runners with Visual Studio 2026 and MFC; no paid or self-hosted runner is required for this public repository.
 
-Four build checks rebuild the solution: **Build (Debug, Win32)**, **Build (Debug, x64)**, **Build (Release, Win32)**, and **Build (Release, x64)**. Repository maintainers should require exactly these four checks in the `main` ruleset after their first successful hosted run. Existing compiler warnings remain nonfatal.
+Four build checks rebuild the solution: **Build (Debug, Win32)**, **Build (Debug, x64)**, **Build (Release, Win32)**, and **Build (Release, x64)**. The `main` ruleset requires these four checks before merging. Fork maintainers can configure the same requirements after their first successful hosted run. Existing compiler warnings remain nonfatal.
 
 Two separate checks, **Analyze (Release, Win32)** and **Analyze (Release, x64)**, run MSVC `/analyze`. Findings are advisory while the existing warning baseline is reviewed; keep these checks outside the required-check ruleset. Build or analyzer execution errors still fail their analysis job so broken checks remain visible.
 
