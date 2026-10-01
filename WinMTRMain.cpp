@@ -114,8 +114,13 @@ void WinMTRMain::ParseCommandLineParams(LPTSTR cmd, WinMTRDialog *wmtrdlg)
 		wmtrdlg->hasIntervalFromCmdLine = true;
 	}
 	if(GetParamValue(cmd, "size",'s', value)) {
-		wmtrdlg->SetPingSize(atoi(value));
-		wmtrdlg->hasPingsizeFromCmdLine = true;
+		int pingSize = atoi(value);
+		if (pingSize < MINPACKET || pingSize > MAXPACKET) {
+			AfxMessageBox("Ping size must be between 64 and 4096 bytes.");
+		} else {
+			wmtrdlg->SetPingSize(pingSize);
+			wmtrdlg->hasPingsizeFromCmdLine = true;
+		}
 	}
 	if(GetParamValue(cmd, "maxLRU",'m', value)) {
 		wmtrdlg->SetMaxLRU(atoi(value));
