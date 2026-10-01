@@ -14,3 +14,7 @@ x64/
 *.pdb
 *.ilk
 *.exe
+/Debug_x32
+/Debug_x64
+/Release_x32
+/Release_x64
