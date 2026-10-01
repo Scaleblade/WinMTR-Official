@@ -11,7 +11,24 @@
 #include "WinMTRNet.h"
 #include <iostream>
 #include <sstream>
+#include <string>
 #include "afxlinkctrl.h"
+
+static std::string EscapeHtml(const char *text)
+{
+	std::string escaped;
+	for (const char *p = text; *p; ++p) {
+		switch (*p) {
+			case '&': escaped += "&amp;"; break;
+			case '<': escaped += "&lt;"; break;
+			case '>': escaped += "&gt;"; break;
+			case '"': escaped += "&quot;"; break;
+			case '\'': escaped += "&#39;"; break;
+			default: escaped += *p; break;
+		}
+	}
+	return escaped;
+}
 
 #define TRACE_MSG(msg)										\
 	{														\
@@ -259,7 +276,7 @@ BOOL WinMTRDialog::InitRegistry()
 		tmp_dword = pingsize;
 		RegSetValueEx(hKey_v,"PingSize", 0, REG_DWORD, (const unsigned char *)&tmp_dword, sizeof(DWORD));
 	} else {
-		if(!hasPingsizeFromCmdLine) pingsize = tmp_dword;
+		if(!hasPingsizeFromCmdLine && tmp_dword >= MINPACKET && tmp_dword <= MAXPACKET) pingsize = tmp_dword;
 	}
 	
 	if(RegQueryValueEx(hKey_v, "MaxLRU", 0, NULL, (unsigned char *)&tmp_dword, &value_size) != ERROR_SUCCESS) {
@@ -712,7 +729,7 @@ void WinMTRDialog::OnCTTC()
 //*****************************************************************************
 void WinMTRDialog::OnCHTC() 
 {
-	char buf[255], t_buf[1000], f_buf[255*100];
+	char buf[255], t_buf[2000], f_buf[255*100*6];
 	
 	int nh = wmtrnet->GetMax();
 	
@@ -729,9 +746,10 @@ void WinMTRDialog::OnCHTC()
 	for(int i=0;i <nh ; i++) {
 		wmtrnet->GetName(i, buf);
 		if( strcmp(buf,"")==0 ) strcpy(buf,"No response from host");
+		std::string escapedHost = EscapeHtml(buf);
 		
 		sprintf(t_buf, "<tr><td>%s</td> <td>%4d</td> <td>%4d</td> <td>%4d</td> <td>%4d</td> <td>%4d</td> <td>%4d</td> <td>%4d</td></tr>\r\n" , 
-					buf, wmtrnet->GetPercent(i),
+					escapedHost.c_str(), wmtrnet->GetPercent(i),
 					wmtrnet->GetXmit(i), wmtrnet->GetReturned(i), wmtrnet->GetBest(i),
 					wmtrnet->GetAvg(i), wmtrnet->GetWorst(i), wmtrnet->GetLast(i));
 		strcat(f_buf, t_buf);
@@ -831,9 +849,9 @@ void WinMTRDialog::OnEXPH()
                    szFilter,
                    this);
 
-	if(dlg.DoModal() == IDOK) {
+\tif(dlg.DoModal() == IDOK) {
 
-		char buf[255], t_buf[1000], f_buf[255*100];
+\t\tchar buf[255], t_buf[2000], f_buf[255*100*6];
 	
 		int nh = wmtrnet->GetMax();
 	
@@ -850,9 +868,10 @@ void WinMTRDialog::OnEXPH()
 		for(int i=0;i <nh ; i++) {
 			wmtrnet->GetName(i, buf);
 			if( strcmp(buf,"")==0 ) strcpy(buf,"No response from host");
+			std::string escapedHost = EscapeHtml(buf);
 		
 			sprintf(t_buf, "<tr><td>%s</td> <td>%4d</td> <td>%4d</td> <td>%4d</td> <td>%4d</td> <td>%4d</td> <td>%4d</td> <td>%4d</td></tr>\r\n" , 
-					buf, wmtrnet->GetPercent(i),
+					escapedHost.c_str(), wmtrnet->GetPercent(i),
 					wmtrnet->GetXmit(i), wmtrnet->GetReturned(i), wmtrnet->GetBest(i),
 					wmtrnet->GetAvg(i), wmtrnet->GetWorst(i), wmtrnet->GetLast(i));
 			strcat(f_buf, t_buf);

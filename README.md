@@ -38,9 +38,12 @@ As you can see, WinMTR requires no other installation effort.
 
 ### Command Line
 ```
-winmtr --help        # See available options
-winmtr github.com    # Trace a host
+winmtr [options] [host]
 ```
+
+Command-line arguments configure the graphical application when it starts. A host argument pre-fills the destination, and `--help` opens the help dialog. Tracing and viewing results are done in the window; this version does not provide a command-line-only trace or text output.
+
+The supported options are `--interval` (`-i`), `--size` (`-s`, 64–4096 bytes), `--maxLRU` (`-m`), and `--numeric` (`-n`, disables DNS lookups).
 
 ## Troubleshooting
 

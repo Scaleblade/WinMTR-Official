@@ -93,6 +93,11 @@ void WinMTROptions::OnOK()
 
 	m_editSize.GetWindowText(tmpstr, 20);
 	pingsize = atoi(tmpstr);
+	if (pingsize < MINPACKET || pingsize > MAXPACKET) {
+		AfxMessageBox("Ping size must be between 64 and 4096 bytes.");
+		m_editSize.SetFocus();
+		return;
+	}
 	
 	m_editMaxLRU.GetWindowText(tmpstr, 20);
 	maxLRU = atoi(tmpstr);
