@@ -849,9 +849,9 @@ void WinMTRDialog::OnEXPH()
                    szFilter,
                    this);
 
-\tif(dlg.DoModal() == IDOK) {
+	if(dlg.DoModal() == IDOK) {
 
-\t\tchar buf[255], t_buf[2000], f_buf[255*100*6];
+		char buf[255], t_buf[2000], f_buf[255*100*6];
 	
 		int nh = wmtrnet->GetMax();
 	

@@ -25,6 +25,18 @@ As you can see, WinMTR requires no other installation effort.
 
 **Tip:** You can copy `WinMTR.exe` to `Windows/System32` so it's accessible via the command line (cmd).
 
+## Building from Source
+
+Open `WinMTR.sln` with Visual Studio 2026 and install the **Desktop development with C++** workload, including the latest MSVC x86/x64 tools, a Windows SDK, and MFC for x86/x64.
+
+You can also build from a Developer PowerShell prompt:
+
+```powershell
+msbuild WinMTR.sln /m /p:Configuration=Release /p:Platform=x64
+```
+
+Use `Win32` instead of `x64` to build the 32-bit application. Build artifacts are written to architecture-specific folders such as `Release_x64` and `Release_x32`.
+
 ## Usage
 
 ### Visual

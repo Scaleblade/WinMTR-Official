@@ -5,6 +5,10 @@
 *.aps
 Debug/
 Release/
+Debug_x32/
+Debug_x64/
+Release_x32/
+Release_x64/
 x64/
 *.obj
 *.pdb
