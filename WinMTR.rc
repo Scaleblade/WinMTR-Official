@@ -90,27 +90,25 @@ BEGIN
     COMBOBOX        IDC_COMBO_HOST,35,12,164,73,CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL | WS_TABSTOP
 END
 
-IDD_DIALOG_OPTIONS DIALOGEX 0, 0, 251, 164
+IDD_DIALOG_OPTIONS DIALOGEX 0, 0, 251, 137
 STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Options"
 FONT 8, "MS Sans Serif", 0, 0, 0x0
 BEGIN
-    DEFPUSHBUTTON   "&OK",IDOK,53,143,50,14,BS_FLAT
-    PUSHBUTTON      "&Cancel",IDCANCEL,141,143,50,14,BS_FLAT
-    GROUPBOX        "",IDC_STATIC,7,91,237,46,BS_FLAT
+    DEFPUSHBUTTON   "&OK",IDOK,53,116,50,14,BS_FLAT
+    PUSHBUTTON      "&Cancel",IDCANCEL,141,116,50,14,BS_FLAT
+    GROUPBOX        "",IDC_STATIC,7,64,237,46,BS_FLAT
     ICON            IDR_MAINFRAME,IDC_STATIC,15,12,20,20
-    LTEXT           "Interval (sec):",IDC_STATIC,15,102,45,10,NOT WS_GROUP
-    EDITTEXT        IDC_EDIT_INTERVAL,71,99,34,13,ES_AUTOHSCROLL
-    LTEXT           "Ping size (bytes):",IDC_STATIC,139,102,53,10,NOT WS_GROUP
-    EDITTEXT        IDC_EDIT_SIZE,196,99,34,13,ES_AUTOHSCROLL | ES_NUMBER
-    CONTROL         "Resolve names",IDC_CHECK_DNS,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,167,119,63,8
-    GROUPBOX        "",IDC_STATIC,7,7,237,82,BS_FLAT
-    CTEXT           "Get Fully Managed Dedicated and Cloud hosting in Europe and USA at killer prices.",IDC_STATIC,31,35,201,17
-    CTEXT           "WinMTR v0.92 is offered under GPL V2 by Appnor MSP",IDC_STATIC,42,14,194,17
-    PUSHBUTTON      "&License and Credits",ID_LICENSE,81,67,94,14,BS_FLAT
-    LTEXT           "Max. hosts in LRU list:",IDC_STATIC,15,119,74,10,NOT WS_GROUP
-    EDITTEXT        IDC_EDIT_MAX_LRU,90,116,34,13,ES_AUTOHSCROLL
-    CONTROL         "www.appnor.com",IDC_MFCLINK1,"MfcLink",WS_TABSTOP,102,51,60,11
+    LTEXT           "Interval (sec):",IDC_STATIC,15,75,45,10,NOT WS_GROUP
+    EDITTEXT        IDC_EDIT_INTERVAL,71,72,34,13,ES_AUTOHSCROLL
+    LTEXT           "Ping size (bytes):",IDC_STATIC,139,75,53,10,NOT WS_GROUP
+    EDITTEXT        IDC_EDIT_SIZE,196,72,34,13,ES_AUTOHSCROLL | ES_NUMBER
+    CONTROL         "Resolve names",IDC_CHECK_DNS,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,167,92,63,8
+    GROUPBOX        "",IDC_STATIC,7,7,237,50,BS_FLAT
+    CTEXT           "WinMTR v0.92 is licensed under GPL V2",IDC_STATIC,42,14,194,17
+    PUSHBUTTON      "&License and Credits",ID_LICENSE,81,35,94,14,BS_FLAT
+    LTEXT           "Max. hosts in LRU list:",IDC_STATIC,15,92,74,10,NOT WS_GROUP
+    EDITTEXT        IDC_EDIT_MAX_LRU,90,89,34,13,ES_AUTOHSCROLL
 END
 
 IDD_DIALOG_LICENSE DIALOGEX 0, 0, 175, 70
@@ -160,15 +158,13 @@ CAPTION "WinMTR"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
     DEFPUSHBUTTON   "OK",IDOK,144,101,50,14
-    CONTROL         "www.appnor.com",IDC_MFCLINK1,"MfcLink",WS_TABSTOP,187,8,60,11
-    LTEXT           "WinMTR v0.92 is offered under GPL V2 by Appnor MSP",IDC_STATIC,7,9,176,10
-    LTEXT           "Usage: WinMTR [options] target_host_name",IDC_STATIC,7,29,144,8
-    LTEXT           "Options:",IDC_STATIC,7,39,28,8
-    LTEXT           "     --interval, -i VALUE. Set ping interval.",IDC_STATIC,26,47,131,8
-    LTEXT           "     --size, -s VALUE. Set ping size.",IDC_STATIC,26,57,109,8
-    LTEXT           "     --maxLRU, -m VALUE. Set max hosts in LRU list.",IDC_STATIC,26,67,163,8
-    LTEXT           "     --help, -h. Print this help.",IDC_STATIC,26,89,92,8
-    LTEXT           "     --numeric, -n. Do not resolve names.",IDC_STATIC,26,78,129,8
+    LTEXT           "Usage: WinMTR [options] target_host_name",IDC_STATIC,7,9,144,8
+    LTEXT           "Options:",IDC_STATIC,7,19,28,8
+    LTEXT           "     --interval, -i VALUE. Set ping interval.",IDC_STATIC,26,27,131,8
+    LTEXT           "     --size, -s VALUE. Set ping size.",IDC_STATIC,26,37,109,8
+    LTEXT           "     --maxLRU, -m VALUE. Set max hosts in LRU list.",IDC_STATIC,26,47,163,8
+    LTEXT           "     --help, -h. Print this help.",IDC_STATIC,26,69,92,8
+    LTEXT           "     --numeric, -n. Do not resolve names.",IDC_STATIC,26,58,129,8
 END
 
 
@@ -194,7 +190,7 @@ BEGIN
     BEGIN
         BLOCK "040904b0"
         BEGIN
-            VALUE "FileDescription", "WinMTR by Appnor MSP - www.winmtr.net"
+            VALUE "FileDescription", "WinMTR network diagnostic tool"
             VALUE "FileVersion", "0.9.0.2"
             VALUE "InternalName", "WinMTR"
             VALUE "LegalCopyright", "WinMTR 0.9 (c) 2010-2011 Appnor MSP - Fully Managed Hosting & Cloud Provider www.appnor.com"
@@ -337,7 +333,7 @@ END
 STRINGTABLE
 BEGIN
     IDP_SOCKETS_INIT_FAILED "Windows sockets initialization failed."
-    IDS_STRING_SB_NAME      "WinMTR v0.92 GPL V2 by Appnor MSP - Fully Managed Hosting & Cloud Provider"
+    IDS_STRING_SB_NAME      "WinMTR v0.92 GPL V2"
     IDS_STRING_SB_PING      "0000000"
     IDS_STRING_CLEAR_HISTORY "Clear History"
 END
