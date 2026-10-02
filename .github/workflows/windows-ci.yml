@@ -1,0 +1,128 @@
+name: Windows CI
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  build:
+    name: Build (${{ matrix.configuration }}, ${{ matrix.platform }})
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration: [Debug, Release]
+        platform: [Win32, x64]
+        include:
+          - platform: Win32
+            suffix: x32
+          - platform: x64
+            suffix: x64
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Select Visual Studio 2026 MSBuild
+        uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
+        with:
+          vs-version: '[18.0,19.0)'
+          msbuild-architecture: x64
+
+      - name: Rebuild solution
+        env:
+          CONFIGURATION: ${{ matrix.configuration }}
+          PLATFORM: ${{ matrix.platform }}
+          OUTPUT_SUFFIX: ${{ matrix.suffix }}
+        run: |
+          $logDir = Join-Path $env:RUNNER_TEMP 'winmtr-build'
+          New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+          & msbuild WinMTR.sln /t:Rebuild /m /nologo /v:minimal `
+            "/p:Configuration=$env:CONFIGURATION" "/p:Platform=$env:PLATFORM" `
+            "/bl:$logDir/build.binlog" "/flp:logfile=$logDir/build.log;verbosity=normal"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $exe = Join-Path "${env:CONFIGURATION}_${env:OUTPUT_SUFFIX}" 'WinMTR.exe'
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+            throw "Build succeeded but the expected executable is missing: $exe"
+          }
+
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Build-logs-${{ matrix.configuration }}-${{ matrix.platform }}
+          path: ${{ runner.temp }}/winmtr-build/
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Upload Release executable
+        if: success() && matrix.configuration == 'Release'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: WinMTR-Release-${{ matrix.platform }}
+          path: Release_${{ matrix.suffix }}/WinMTR.exe
+          retention-days: 7
+          if-no-files-found: error
+
+  analyze:
+    # Keep these checks outside the required-check ruleset while reviewing findings.
+    name: Analyze (Release, ${{ matrix.platform }})
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [Win32, x64]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Select Visual Studio 2026 MSBuild
+        uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
+        with:
+          vs-version: '[18.0,19.0)'
+          msbuild-architecture: x64
+
+      - name: Rebuild with MSVC analysis
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          # _CL_ appends flags after MSBuild's /analyze- default on Win32.
+          _CL_: /analyze /analyze:WX-
+        run: |
+          $logDir = Join-Path $env:RUNNER_TEMP 'winmtr-analysis'
+          New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+          & msbuild WinMTR.sln /t:Rebuild /m /nologo /v:minimal `
+            /p:Configuration=Release "/p:Platform=$env:PLATFORM" `
+            "/bl:$logDir/analysis.binlog" "/flp:logfile=$logDir/analysis.log;verbosity=normal"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $reports = @(Get-ChildItem -Path . -Recurse -File -Filter '*.nativecodeanalysis.xml')
+          if ($reports.Count -eq 0) {
+            throw 'MSVC analysis completed without producing native-analysis reports.'
+          }
+
+      - name: Upload analysis diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Analysis-logs-Release-${{ matrix.platform }}
+          path: |
+            ${{ runner.temp }}/winmtr-analysis/
+            **/*.nativecodeanalysis.xml
+          retention-days: 7
+          if-no-files-found: warn
