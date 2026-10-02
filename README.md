@@ -25,6 +25,50 @@ As you can see, WinMTR requires no other installation effort.
 
 **Tip:** You can copy `WinMTR.exe` to `Windows/System32` so it's accessible via the command line (cmd).
 
+## Building from Source
+
+Open `WinMTR.sln` with Visual Studio 2026 and install the **Desktop development with C++** workload, including the latest MSVC x86/x64 tools, a Windows SDK, and MFC for x86/x64.
+
+You can also build from a Developer PowerShell prompt:
+
+```powershell
+msbuild WinMTR.sln /m /p:Configuration=Release /p:Platform=x64
+```
+
+Use `Win32` instead of `x64` to build the 32-bit application. Build artifacts are written to architecture-specific folders such as `Release_x64` and `Release_x32`.
+
+## Continuous Integration
+
+The **Windows CI** workflow runs on pull requests targeting `main` and can be run manually from the Actions tab once it is on the default branch. It does not run on pushes or a schedule. It uses standard GitHub-hosted `windows-2025-vs2026` runners with Visual Studio 2026 and MFC; no paid or self-hosted runner is required for this public repository.
+
+Four build checks rebuild the solution: **Build (Debug, Win32)**, **Build (Debug, x64)**, **Build (Release, Win32)**, and **Build (Release, x64)**. The `main` ruleset requires these four checks before merging. Fork maintainers can configure the same requirements after their first successful hosted run. Existing compiler warnings remain nonfatal.
+
+Two separate checks, **Analyze (Release, Win32)** and **Analyze (Release, x64)**, run MSVC `/analyze`. Findings are advisory while the existing warning baseline is reviewed; keep these checks outside the required-check ruleset. Build or analyzer execution errors still fail their analysis job so broken checks remain visible.
+
+To reproduce a build in a VS 2026 Developer PowerShell prompt, run:
+
+```powershell
+msbuild WinMTR.sln /t:Rebuild /m /p:Configuration=Debug /p:Platform=Win32
+```
+
+Use `Release` and/or `x64` to reproduce the other configurations. Close any running copy of the executable in the output folder before rebuilding. To reproduce analysis without permanently changing local compiler settings:
+
+```powershell
+$previousCl = $env:_CL_
+try {
+    $env:_CL_ = '/analyze /analyze:WX-'
+    msbuild WinMTR.sln /t:Rebuild /m /p:Configuration=Release /p:Platform=x64
+} finally {
+    $env:_CL_ = $previousCl
+}
+```
+
+Use `Win32` for the other analysis check. `_CL_` appends the flags after MSBuild's defaults, which otherwise disable analysis for Win32. Diagnostics appear in the build output and in `*.nativecodeanalysis.xml` reports.
+
+Open a workflow run under **Actions → Windows CI** to download artifacts while signed in to GitHub. Successful Release builds provide `WinMTR-Release-Win32` and `WinMTR-Release-x64`, each containing `WinMTR.exe`. Build jobs retain text and binary logs, and analysis jobs retain logs and native-analysis reports, including available diagnostics after a failure. Artifacts expire after seven days. These are CI builds, not published releases.
+
+CI verifies compilation, linking, and static analysis. It does not test the GUI or live network tracing. Formatting, clang-tidy, and regression tests are separate follow-up work.
+
 ## Usage
 
 ### Visual
