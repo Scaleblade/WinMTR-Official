@@ -37,6 +37,10 @@ msbuild WinMTR.sln /m /p:Configuration=Release /p:Platform=x64
 
 Use `Win32` instead of `x64` to build the 32-bit application. Build artifacts are written to architecture-specific folders such as `Release_x64` and `Release_x32`.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for commit message and pull request title conventions.
+
 ## Continuous Integration
 
 The **Windows CI** workflow runs on pull requests targeting `main` and can be run manually from the Actions tab once it is on the default branch. It does not run on pushes or a schedule. It uses standard GitHub-hosted `windows-2025-vs2026` runners with Visual Studio 2026 and MFC; no paid or self-hosted runner is required for this public repository.
