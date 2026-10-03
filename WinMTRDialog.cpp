@@ -77,7 +77,6 @@ static std::string EscapeHtml(const char *text)
 static	 char THIS_FILE[] = __FILE__;
 #endif
 
-void PingThread(void *p);
 
 //*****************************************************************************
 // BEGIN_MESSAGE_MAP
@@ -117,6 +116,7 @@ WinMTRDialog::WinMTRDialog(CWnd* pParent)
 {
 	m_hIcon = AfxGetApp()->LoadIcon(IDR_MAINFRAME);
 	m_autostart = 0;
+	redrawTicks = 0;
 	useDNS = DEFAULT_DNS;
 	interval = DEFAULT_INTERVAL;
 	pingsize = DEFAULT_PING_SIZE;
@@ -128,14 +128,12 @@ WinMTRDialog::WinMTRDialog(CWnd* pParent)
 	hasMaxLRUFromCmdLine = false;
 	hasUseDNSFromCmdLine = false;
 
-	traceThreadMutex = CreateMutex(NULL, FALSE, NULL);
-	wmtrnet = new WinMTRNet(this);
+	wmtrnet = new WinMTRNet();
 }
 
 WinMTRDialog::~WinMTRDialog()
 {
 	delete wmtrnet;
-	CloseHandle(traceThreadMutex);
 }
 
 //*****************************************************************************
@@ -612,31 +610,29 @@ void WinMTRDialog::OnRestart()
 
 	if(state == IDLE) {
 
-		if(InitMTRNet()) {
-			if(m_comboHost.FindString(-1, sHost) == CB_ERR) {
-				m_comboHost.InsertString(m_comboHost.GetCount() - 1,sHost);
+		if(m_comboHost.FindString(-1, sHost) == CB_ERR) {
+			m_comboHost.InsertString(m_comboHost.GetCount() - 1,sHost);
 
-				HKEY hKey;
-				DWORD tmp_dword;
-				LONG r;
-				char key_name[20];
+			HKEY hKey;
+			DWORD tmp_dword;
+			LONG r;
+			char key_name[20];
 
-				r = RegOpenKeyEx(	HKEY_CURRENT_USER, "Software", 0, KEY_ALL_ACCESS,&hKey);
-				r = RegOpenKeyEx(	hKey, "WinMTR", 0, KEY_ALL_ACCESS, &hKey);
-				r = RegOpenKeyEx(	hKey, "LRU", 0, KEY_ALL_ACCESS, &hKey);
+			r = RegOpenKeyEx(	HKEY_CURRENT_USER, "Software", 0, KEY_ALL_ACCESS,&hKey);
+			r = RegOpenKeyEx(	hKey, "WinMTR", 0, KEY_ALL_ACCESS, &hKey);
+			r = RegOpenKeyEx(	hKey, "LRU", 0, KEY_ALL_ACCESS, &hKey);
 
-				if(nrLRU >= maxLRU)
-					nrLRU = 0;
-				
-				nrLRU++;
-				sprintf(key_name, "Host%d", nrLRU);
-				r = RegSetValueEx(hKey,key_name, 0, REG_SZ, (const unsigned char *)(LPCTSTR)sHost, strlen((LPCTSTR)sHost)+1);
-				tmp_dword = nrLRU;
-				r = RegSetValueEx(hKey,"NrLRU", 0, REG_DWORD, (const unsigned char *)&tmp_dword, sizeof(DWORD));
-				RegCloseKey(hKey);
-			}
-			Transit(TRACING);
+			if(nrLRU >= maxLRU)
+				nrLRU = 0;
+
+			nrLRU++;
+			sprintf(key_name, "Host%d", nrLRU);
+			r = RegSetValueEx(hKey,key_name, 0, REG_SZ, (const unsigned char *)(LPCTSTR)sHost, strlen((LPCTSTR)sHost)+1);
+			tmp_dword = nrLRU;
+			r = RegSetValueEx(hKey,"NrLRU", 0, REG_DWORD, (const unsigned char *)&tmp_dword, sizeof(DWORD));
+			RegCloseKey(hKey);
 		}
+		Transit(TRACING);
 	} else {
 		Transit(STOPPING);
 	}
@@ -928,8 +924,14 @@ void WinMTRDialog::OnEXPH()
 //
 // 
 //*****************************************************************************
-void WinMTRDialog::OnCancel() 
+void WinMTRDialog::OnCancel()
 {
+	Transit(EXIT);
+}
+
+void WinMTRDialog::OnOK()
+{
+	Transit(EXIT);
 }
 
 
@@ -985,98 +987,6 @@ int WinMTRDialog::DisplayRedraw()
 }
 
 
-//*****************************************************************************
-// WinMTRDialog::InitMTRNet
-//
-// 
-//*****************************************************************************
-int WinMTRDialog::InitMTRNet()
-{
-	char strtmp[255];
-	char *Hostname = strtmp;
-	char buf[255];
-	struct hostent *host;
-	m_comboHost.GetWindowText(strtmp, 255);
-   	
-	if (Hostname == NULL) Hostname = "localhost";
-   
-	int isIP=1;
-	char *t = Hostname;
-	while(*t) {
-		if(!isdigit(*t) && *t!='.') {
-			isIP=0;
-			break;
-		}
-		t++;
-	}
-
-	if(!isIP) {
-		sprintf(buf, "Resolving host %s...", strtmp);
-		statusBar.SetPaneText(0,buf);
-		host = gethostbyname(Hostname);
-		if(host == NULL) {
-			statusBar.SetPaneText(0, CString((LPCSTR)IDS_STRING_SB_NAME) );
-			AfxMessageBox("Unable to resolve hostname.");
-			return 0;
-		}
-	}
-
-	return 1;
-}
-
-
-//*****************************************************************************
-// PingThread
-//
-// 
-//*****************************************************************************
-void PingThread(void *p)
-{
-	WinMTRDialog *wmtrdlg = (WinMTRDialog *)p;
-	WaitForSingleObject(wmtrdlg->traceThreadMutex, INFINITE);
-
-	struct hostent *host, *lhost;
-	char strtmp[255];
-	char *Hostname = strtmp;
-	int traddr;
-	int localaddr;
-
-	wmtrdlg->m_comboHost.GetWindowText(strtmp, 255);
-   	
-	if (Hostname == NULL) Hostname = "localhost";
-   
-	int isIP=1;
-	char *t = Hostname;
-	while(*t) {
-		if(!isdigit(*t) && *t!='.') {
-			isIP=0;
-			break;
-		}
-		t++;
-	}
-
-	if(!isIP) {
-      host = gethostbyname(Hostname);
-      traddr = *(int *)host->h_addr;
-	} else
-      traddr = inet_addr(Hostname);
-
-	lhost = gethostbyname("localhost");
-	if(lhost == NULL) {
-      AfxMessageBox("Unable to get local IP address.");
-      ReleaseMutex(wmtrdlg->traceThreadMutex);
-      return;
-	}
-	localaddr = *(int *)lhost->h_addr;
-	
-	wmtrdlg->wmtrnet->DoTrace(traddr);
-
-	ReleaseMutex(wmtrdlg->traceThreadMutex);
-   _endthread();
-}
-
-
-
 void WinMTRDialog::OnCbnSelchangeComboHost()
 {
 }
@@ -1123,6 +1033,9 @@ void WinMTRDialog::Transit(STATES new_state)
 	switch(new_state) {
 		case IDLE:
 			switch (state) {
+				case TRACING:
+					transition = TRACING_TO_IDLE;
+				break;
 				case STOPPING:
 					transition = STOPPING_TO_IDLE;
 				break;
@@ -1188,18 +1101,31 @@ void WinMTRDialog::Transit(STATES new_state)
 
 	// modify controls according to new state
 	switch(transition) {
-		case IDLE_TO_TRACING:
+		case IDLE_TO_TRACING: {
+			redrawTicks = 0;
 			m_buttonStart.EnableWindow(FALSE);
 			m_buttonStart.SetWindowText("Stop");
 			m_comboHost.EnableWindow(FALSE);
 			m_buttonOptions.EnableWindow(FALSE);
 			statusBar.SetPaneText(0, "Double click on host name for more information.");
-			_beginthread(PingThread, 0 , this);
-			m_buttonStart.EnableWindow(TRUE);
-		break;
+			CString destination;
+			m_comboHost.GetWindowText(destination);
+			destination.TrimLeft();
+			destination.TrimRight();
+			TraceConfig config = {static_cast<const char*>(destination), pingsize, interval, useDNS != FALSE};
+			if (!wmtrnet->StartTrace(config)) {
+				const std::string error = wmtrnet->GetStatus().error;
+				Transit(IDLE);
+				if (!error.empty()) AfxMessageBox(error.c_str());
+			} else {
+				m_buttonStart.EnableWindow(TRUE);
+				m_buttonStart.SetFocus();
+			}
+		} break;
 		case IDLE_TO_IDLE:
 			// nothing to be done
 		break;
+		case TRACING_TO_IDLE:
 		case STOPPING_TO_IDLE:
 			m_buttonStart.EnableWindow(TRUE);
 			statusBar.SetPaneText(0, CString((LPCSTR)IDS_STRING_SB_NAME) );
@@ -1218,7 +1144,7 @@ void WinMTRDialog::Transit(STATES new_state)
 			m_buttonStart.EnableWindow(FALSE);
 			m_comboHost.EnableWindow(FALSE);
 			m_buttonOptions.EnableWindow(FALSE);
-			wmtrnet->StopTrace();
+			wmtrnet->RequestStop();
 			statusBar.SetPaneText(0, "Waiting for last packets in order to stop trace ...");
 			DisplayRedraw();
 		break;
@@ -1231,7 +1157,7 @@ void WinMTRDialog::Transit(STATES new_state)
 			m_buttonStart.EnableWindow(FALSE);
 			m_comboHost.EnableWindow(FALSE);
 			m_buttonOptions.EnableWindow(FALSE);
-			wmtrnet->StopTrace();
+			wmtrnet->RequestStop();
 			statusBar.SetPaneText(0, "Waiting for last packets in order to stop trace ...");
 		break;
 		case STOPPING_TO_EXIT:
@@ -1247,25 +1173,38 @@ void WinMTRDialog::Transit(STATES new_state)
 
 void WinMTRDialog::OnTimer(UINT_PTR nIDEvent)
 {
-	static unsigned int call_count = 0;
-	call_count += 1;
-
-	if(state == EXIT && WaitForSingleObject(traceThreadMutex, 0) == WAIT_OBJECT_0) {
-		ReleaseMutex(traceThreadMutex);
-		OnOK();
-	}
-
-
-	if( WaitForSingleObject(traceThreadMutex, 0) == WAIT_OBJECT_0 ) {
-		ReleaseMutex(traceThreadMutex);
-		Transit(IDLE);
-	} else if( (call_count % 10 == 0) && (WaitForSingleObject(traceThreadMutex, 0) == WAIT_TIMEOUT) ) {
-		ReleaseMutex(traceThreadMutex);
-		if( state == TRACING) Transit(TRACING);
-		else if( state == STOPPING) Transit(STOPPING);
-	}
-
-	CDialog::OnTimer(nIDEvent);
+    if (nIDEvent != 1) {
+        CDialog::OnTimer(nIDEvent);
+        return;
+    }
+    const bool redraw = (++redrawTicks % 10) == 0;
+    if (wmtrnet->TryReap()) {
+        if (state == EXIT) {
+            KillTimer(1);
+            CDialog::OnOK();
+            return;
+        }
+        if (state == TRACING || state == STOPPING) {
+            DisplayRedraw();
+            const std::string error = wmtrnet->GetStatus().error;
+            Transit(IDLE);
+            if (!error.empty()) AfxMessageBox(error.c_str());
+        }
+    } else {
+        const WinMTRNet::Status status = wmtrnet->GetStatus();
+        if (state == STOPPING || state == EXIT) {
+            statusBar.SetPaneText(0,
+                status.phase == WinMTRNet::Resolving || status.phase == WinMTRNet::DrainingDNS
+                ? "Waiting for DNS lookup to finish ..."
+                : "Waiting for outstanding probes to finish ...");
+        } else if (state == TRACING && status.phase == WinMTRNet::Resolving) {
+            statusBar.SetPaneText(0, "Resolving destination hostname ...");
+        } else if (state == TRACING) {
+            statusBar.SetPaneText(0, "Double click on host name for more information.");
+        }
+        if (redraw && (state == TRACING || state == STOPPING)) DisplayRedraw();
+    }
+    CDialog::OnTimer(nIDEvent);
 }
 
 
