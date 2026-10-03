@@ -12,6 +12,41 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <shellapi.h>
+
+static bool IsHostOrIPv4(const char *text)
+{
+	const size_t length = strlen(text);
+	if (length == 0 || length > 253) return false;
+
+	// Accept a trailing DNS root dot, but never empty labels or prose.
+	const size_t end = text[length - 1] == '.' ? length - 1 : length;
+	if (end == 0) return false;
+	bool numeric = true;
+	bool validIPv4 = end == length;
+	unsigned int labels = 0;
+	for (size_t start = 0; start < end;) {
+		size_t stop = start;
+		unsigned int octet = 0;
+		while (stop < end && text[stop] != '.') {
+			const char c = text[stop];
+			if (c >= '0' && c <= '9') {
+				// Saturate to avoid overflow on long numeric DNS labels.
+				if (octet <= 255) octet = octet * 10 + (c - '0');
+			} else {
+				numeric = false;
+				if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '-')) return false;
+			}
+			++stop;
+		}
+		if (stop == start || stop - start > 63 || text[start] == '-' || text[stop - 1] == '-') return false;
+		if (octet > 255) validIPv4 = false;
+		++labels;
+		start = stop + 1;
+		if (start == end) return false;
+	}
+	return !numeric || (validIPv4 && labels == 4);
+}
 
 static std::string EscapeHtml(const char *text)
 {
@@ -436,12 +471,28 @@ HCURSOR WinMTRDialog::OnQueryDragIcon()
 void WinMTRDialog::OnDblclkList(NMHDR* pNMHDR, LRESULT* pResult)
 {
 	*pResult = 0;
+	const NMITEMACTIVATE *click = reinterpret_cast<const NMITEMACTIVATE *>(pNMHDR);
+	const int nItem = click->iItem;
+	if (wmtrnet == NULL || nItem < 0 || nItem >= m_listMTR.GetItemCount() || nItem >= MaxHost ||
+		click->iSubItem < 0 || click->iSubItem >= MTR_NR_COLS) return;
+
+	if (click->iSubItem == 0) {
+		if (nItem < 2 || !IsHostOrIPv4(m_listMTR.GetItemText(nItem, 0))) return;
+		const unsigned int addr = static_cast<unsigned int>(wmtrnet->GetAddr(nItem));
+		if (addr == 0) return;
+
+		CString url;
+		url.Format("https://bgp.tools/search?q=%u.%u.%u.%u",
+			(addr >> 24) & 0xff, (addr >> 16) & 0xff, (addr >> 8) & 0xff, addr & 0xff);
+		const HINSTANCE result = ShellExecute(m_hWnd, "open", url, NULL, NULL, SW_SHOWNORMAL);
+		if (reinterpret_cast<INT_PTR>(result) <= 32) {
+			AfxMessageBox("Unable to open bgp.tools in your default browser.");
+		}
+		return;
+	}
 
 	if(state == TRACING) {
-		
-		POSITION pos = m_listMTR.GetFirstSelectedItemPosition();
-		if(pos!=NULL) {
-			int nItem = m_listMTR.GetNextSelectedItem(pos);
+		{
 			WinMTRProperties wmtrprop;
 
 			if(wmtrnet->GetAddr(nItem)==0) {
