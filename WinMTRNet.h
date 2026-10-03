@@ -1,93 +1,122 @@
-//*****************************************************************************
-// FILE:            WinMTRNet.h
-//
-//
-// DESCRIPTION:
-//   
-//
-// NOTES:
-//    
-//
-//*****************************************************************************
-
 #ifndef WINMTRNET_H_
 #define WINMTRNET_H_
 
+#include <winsock2.h>
+#include <windows.h>
+#include <iphlpapi.h>
+#include <icmpapi.h>
+#include <memory>
+#include <string>
 
-class WinMTRDialog;
-
-typedef ip_option_information IPINFO, *PIPINFO, FAR *LPIPINFO;
-
+typedef IP_OPTION_INFORMATION IPINFO;
 #ifdef _WIN64
-typedef icmp_echo_reply32 ICMPECHO, *PICMPECHO, FAR *LPICMPECHO;
+typedef ICMP_ECHO_REPLY32 ICMPECHO;
 #else
-typedef icmp_echo_reply ICMPECHO, *PICMPECHO, FAR *LPICMPECHO;
+typedef ICMP_ECHO_REPLY ICMPECHO;
 #endif
-
+typedef ICMPECHO* PICMPECHO;
 #define ECHO_REPLY_TIMEOUT 5000
 
-struct s_nethost {
-  __int32 addr;		// IP as a decimal, big endian
-  int xmit;			// number of PING packets sent
-  int returned;		// number of ICMP echo replies received
-  unsigned long total;	// total time
-  int last;				// last time
-  int best;				// best time
-  int worst;			// worst time
-  char name[255];
+struct TraceConfig {
+    std::string destination;
+    int packetSize;
+    double interval;
+    bool useDNS;
 };
 
-//*****************************************************************************
-// CLASS:  WinMTRNet
-//
-//
-//*****************************************************************************
+// Injection seam for deterministic lifecycle tests; production uses Win32.
+class WinMTRNetBackend {
+public:
+    WinMTRNetBackend();
+    virtual ~WinMTRNetBackend();
+    virtual bool Initialize(std::string& error);
+    virtual void Shutdown();
+    virtual HANDLE CreateStopEvent();
+    virtual HANDLE Launch(unsigned (__stdcall *entry)(void*), void* argument);
+    virtual DWORD Wait(HANDLE handle, DWORD timeout);
+    virtual bool ResolveDestination(const std::string& destination, int& address);
+    virtual std::string ResolveName(int address);
+    virtual DWORD Probe(int address, void* data, WORD size, IPINFO* options,
+                        void* reply, DWORD replySize);
+private:
+    typedef HANDLE (WINAPI *CreateFileFn)();
+    typedef BOOL (WINAPI *CloseFileFn)(HANDLE);
+    typedef DWORD (WINAPI *SendEchoFn)(HANDLE, IPAddr, LPVOID, WORD,
+                                     PIP_OPTION_INFORMATION, LPVOID, DWORD, DWORD);
+    bool socketsStarted;
+    HMODULE library;
+    HANDLE icmp;
+    CloseFileFn closeFile;
+    SendEchoFn sendEcho;
+};
+
+struct s_nethost {
+    __int32 addr;
+    int xmit;
+    int returned;
+    unsigned long total;
+    int last;
+    int best;
+    int worst;
+    char name[255];
+};
 
 class WinMTRNet {
-	typedef HANDLE (WINAPI *LPFNICMPCREATEFILE)(VOID);
-	typedef BOOL  (WINAPI *LPFNICMPCLOSEHANDLE)(HANDLE);
-	typedef DWORD (WINAPI *LPFNICMPSENDECHO)(HANDLE, u_long, LPVOID, WORD, LPVOID, LPVOID, DWORD, DWORD);
-
 public:
+    enum { MAX_HOSTS = 256, MAX_HOPS = 30 };
+    enum Phase { Idle, Resolving, Probing, DrainingProbes, DrainingDNS };
+    struct Status { Phase phase; std::string error; };
 
-	WinMTRNet(WinMTRDialog *wp);
-	~WinMTRNet();
-	void	DoTrace(int address);
-	void	ResetHops();
-	void	StopTrace();
+    // An injected backend must outlive this object. StartTrace/TryReap are
+    // UI-owner operations. Workers only use RequestStop and synchronized getters.
+    explicit WinMTRNet(WinMTRNetBackend* backend = NULL);
+    ~WinMTRNet();
+    bool StartTrace(const TraceConfig& config);
+    void RequestStop();
+    bool TryReap(); // true only after workers finish and owned handles are closed
+    Status GetStatus();
 
-	int		GetAddr(int at);
-	int		GetName(int at, char *n);
-	int		GetBest(int at);
-	int		GetWorst(int at);
-	int		GetAvg(int at);
-	int		GetPercent(int at);
-	int		GetLast(int at);
-	int		GetReturned(int at);
-	int		GetXmit(int at);
-	int		GetMax();
-
-	void	SetAddr(int at, __int32 addr);
-	void	SetName(int at, char *n);
-	void	SetBest(int at, int current);
-	void	SetWorst(int at, int current);
-	void	SetLast(int at, int last);
-	void	AddReturned(int at);
-	void	AddXmit(int at);
-
-	WinMTRDialog		*wmtrdlg;
-	__int32				last_remote_addr;
-	bool				tracing;
-	bool				initialized;
-    HANDLE				hICMP;
-	LPFNICMPCREATEFILE	lpfnIcmpCreateFile;
-	LPFNICMPCLOSEHANDLE lpfnIcmpCloseHandle;
-	LPFNICMPSENDECHO	lpfnIcmpSendEcho;
+    int GetAddr(int at);
+    int GetName(int at, char* name);
+    int GetBest(int at);
+    int GetWorst(int at);
+    int GetAvg(int at);
+    int GetPercent(int at);
+    int GetLast(int at);
+    int GetReturned(int at);
+    int GetXmit(int at);
+    int GetMax();
 private:
-	HINSTANCE			hICMP_DLL;
+    WinMTRNet(const WinMTRNet&) = delete;
+    WinMTRNet& operator=(const WinMTRNet&) = delete;
+    struct Worker { WinMTRNet* net; int index; int address; };
+    static unsigned __stdcall Coordinator(void* argument);
+    static unsigned __stdcall ProbeWorker(void* argument);
+    static unsigned __stdcall DNSWorker(void* argument);
+    void Run();
+    void ProbeLoop(const Worker& worker);
+    void ResetHops();
+    bool Stopping();
+    void Join(HANDLE thread);
+    void Fail(const char* message);
+    void SetPhase(Phase phase);
+    void SetAddr(int at, __int32 address);
+    void SetName(int at, const char* name);
+    void SetBest(int at, int current);
+    void SetLast(int at, int last);
+    void AddReturned(int at);
+    void AddXmit(int at);
 
-    struct s_nethost	host[MaxHost];
-	HANDLE				ghMutex; 
+    std::unique_ptr<WinMTRNetBackend> ownedBackend;
+    WinMTRNetBackend* backend;
+    bool initialized;
+    CRITICAL_SECTION mutex;
+    std::unique_ptr<const TraceConfig> config;
+    HANDLE coordinator;
+    HANDLE stopEvent;
+    HANDLE dnsThreads[MAX_HOSTS]; // published under mutex; joined after probes
+    s_nethost host[MAX_HOSTS];
+    __int32 last_remote_addr;
+    Status status;
 };
-
-#endif	// ifndef WINMTRNET_H_
+#endif

@@ -71,7 +71,9 @@ Use `Win32` for the other analysis check. `_CL_` appends the flags after MSBuild
 
 Open a workflow run under **Actions → Windows CI** to download artifacts while signed in to GitHub. Successful Release builds provide `WinMTR-Release-Win32` and `WinMTR-Release-x64`, each containing `WinMTR.exe`. Build jobs retain text and binary logs, and analysis jobs retain logs and native-analysis reports, including available diagnostics after a failure. Artifacts expire after seven days. These are CI builds, not published releases.
 
-CI verifies compilation, linking, and static analysis. It does not test the GUI or live network tracing. Formatting, clang-tidy, and regression tests are separate follow-up work.
+CI verifies compilation, linking, static analysis, and trace lifecycle regression tests in all four build configurations. It does not automate the GUI or live network tracing. Formatting and clang-tidy remain separate follow-up work.
+
+The native `TraceLifecycleTests` target builds with the solution. Run `Release_x64\TraceLifecycleTests.exe` after a Release/x64 build (or the matching executable in another configuration). It injects delayed DNS/probes and startup/wait failures without contacting a public network; see [tests/README.md](tests/README.md) for coverage and manual smoke checks.
 
 ## Usage
 
@@ -83,6 +85,8 @@ CI verifies compilation, linking, and static analysis. It does not test the GUI 
 4. Push the **Start** button and wait
 5. Copy or export the results in text or HTML format — useful if you want to document or file a complaint with your ISP
 6. Click on **Clear History** to remove the hosts you have previously traced
+
+**Stopping and closing:** Stop, Exit, the window close button, and Escape safely drain outstanding workers. The window remains responsive while waiting. An outstanding ICMP request can take up to the existing five-second probe timeout to return. To retain Windows 7 compatibility, DNS lookups finish naturally; shutdown shows a DNS waiting message and has no fixed DNS deadline. A new trace becomes available after the previous session finishes cleanup.
 
 Double-click a hostname or IP in the **Hostname** column to look up the hop's underlying IPv4 address on [bgp.tools](https://bgp.tools/) in your default browser. This works during tracing and after stopping. The first two hops, unanswered hops, and rows displaying diagnostic messages are skipped. Valid hops from row 3 onward can be looked up, including private IP addresses.
 

@@ -48,6 +48,7 @@ public:
 		IDLE_TO_TRACING,
 		IDLE_TO_EXIT,
 		TRACING_TO_TRACING,
+		TRACING_TO_IDLE,
 		TRACING_TO_STOPPING,
 		TRACING_TO_EXIT,
 		STOPPING_TO_IDLE,
@@ -67,14 +68,12 @@ public:
 	CButton	m_buttonExpT;
 	CButton	m_buttonExpH;
 	
-	int InitMTRNet();
 
 	int DisplayRedraw();
 	void Transit(STATES new_state);
 
 	STATES				state;
 	STATE_TRANSITIONS	transition;
-	HANDLE				traceThreadMutex; 
 	double				interval;
 	bool				hasIntervalFromCmdLine;
 	int					pingsize;
@@ -108,6 +107,7 @@ protected:
 	afx_msg void OnRestart();
 	afx_msg void OnOptions();
 	virtual void OnCancel();
+	virtual void OnOK();
 
 	afx_msg void OnCTTC();
 	afx_msg void OnCHTC();
@@ -122,6 +122,7 @@ public:
 	afx_msg void OnCbnSelendokComboHost();
 private:
 	void ClearHistory();
+	unsigned int redrawTicks;
 public:
 	afx_msg void OnCbnCloseupComboHost();
 	afx_msg void OnTimer(UINT_PTR nIDEvent);
