@@ -84,6 +84,10 @@ CI verifies compilation, linking, and static analysis. It does not test the GUI 
 5. Copy or export the results in text or HTML format — useful if you want to document or file a complaint with your ISP
 6. Click on **Clear History** to remove the hosts you have previously traced
 
+Double-click a hostname or IP in the **Hostname** column to look up the hop's underlying IPv4 address on [bgp.tools](https://bgp.tools/) in your default browser. This works during tracing and after stopping. The first two hops, unanswered hops, and rows displaying diagnostic messages are skipped. Valid hops from row 3 onward can be looked up, including private IP addresses.
+
+Double-click a statistics column during tracing to open the existing hop-details dialog.
+
 ### Command Line
 ```
 winmtr [options] [host]
