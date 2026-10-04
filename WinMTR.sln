@@ -3,6 +3,8 @@ Microsoft Visual Studio Solution File, Format Version 11.00
 # Visual Studio 2010
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "WinMTR", "WinMTR.vcxproj", "{EE7B51B5-96FC-BED3-F2A6-0713CECBB579}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TraceLifecycleTests", "tests\TraceLifecycleTests.vcxproj", "{E53D4D98-BD79-4F1B-AD63-26B3C1EA37D5}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Win32 = Debug|Win32
@@ -19,6 +21,14 @@ Global
 		{EE7B51B5-96FC-BED3-F2A6-0713CECBB579}.Release|Win32.Build.0 = Release|Win32
 		{EE7B51B5-96FC-BED3-F2A6-0713CECBB579}.Release|x64.ActiveCfg = Release|x64
 		{EE7B51B5-96FC-BED3-F2A6-0713CECBB579}.Release|x64.Build.0 = Release|x64
+		{E53D4D98-BD79-4F1B-AD63-26B3C1EA37D5}.Debug|Win32.ActiveCfg = Debug|Win32
+		{E53D4D98-BD79-4F1B-AD63-26B3C1EA37D5}.Debug|Win32.Build.0 = Debug|Win32
+		{E53D4D98-BD79-4F1B-AD63-26B3C1EA37D5}.Debug|x64.ActiveCfg = Debug|x64
+		{E53D4D98-BD79-4F1B-AD63-26B3C1EA37D5}.Debug|x64.Build.0 = Debug|x64
+		{E53D4D98-BD79-4F1B-AD63-26B3C1EA37D5}.Release|Win32.ActiveCfg = Release|Win32
+		{E53D4D98-BD79-4F1B-AD63-26B3C1EA37D5}.Release|Win32.Build.0 = Release|Win32
+		{E53D4D98-BD79-4F1B-AD63-26B3C1EA37D5}.Release|x64.ActiveCfg = Release|x64
+		{E53D4D98-BD79-4F1B-AD63-26B3C1EA37D5}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
