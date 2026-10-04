@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdio>
 #include <stdexcept>
+#include <vector>
 
 [[noreturn]] static void Failed(const char* expression, int line)
 {
@@ -140,6 +141,12 @@ static void ImmediateStopAndRepeat()
     FakeBackend backend;
     std::unique_ptr<WinMTRNet> storage(new WinMTRNet(&backend));
     WinMTRNet& net = *storage;
+    // Exercise the CRT's worker-thread paths before counting handles; Debug
+    // runtime initialization can acquire process-wide handles lazily.
+    CHECK(net.StartTrace(Config()));
+    backend.intervalEntered.Await();
+    net.RequestStop();
+    Finish(net);
     DWORD handlesBefore = 0, handlesAfter = 0;
     CHECK(GetProcessHandleCount(GetCurrentProcess(), &handlesBefore));
     for (int i = 0; i < 100; ++i) {
@@ -150,6 +157,8 @@ static void ImmediateStopAndRepeat()
         CHECK(net.GetStatus().error.empty());
     }
     CHECK(GetProcessHandleCount(GetCurrentProcess(), &handlesAfter));
+    if (handlesAfter != handlesBefore)
+        std::fprintf(stderr, "Handle count before=%lu after=%lu\n", handlesBefore, handlesAfter);
     CHECK(handlesAfter == handlesBefore);
     CHECK(backend.dnsLaunches == 0);
 }
@@ -430,6 +439,247 @@ static void CloseDuringOperation(bool destination, bool dns)
     CHECK(backend.unsafeShutdowns == 0);
 }
 
+// Each real worker has its own virtual clock. Scripted probes advance it;
+// timed waits advance it without sleeping, then block on cancellation at the end.
+class ScriptedBackend : public FakeBackend {
+public:
+    struct Step { DWORD count, error, status, duration, rtt; };
+    std::vector<Step> script;
+    std::vector<ULONGLONG> starts[WinMTRNet::MAX_HOPS];
+    std::vector<DWORD> delays[WinMTRNet::MAX_HOPS];
+    size_t attempts[WinMTRNet::MAX_HOPS] = {};
+    Event firstWait, advance{true}, ready;
+    ULONGLONG initialClock = 0;
+    bool failTimedWait = false;
+    static thread_local int hop;
+    static thread_local ULONGLONG clock;
+
+    ULONGLONG NowMilliseconds() override {
+        if (hop == -1) clock = initialClock;
+        return clock;
+    }
+    ProbeResult Probe(int, void*, WORD, IPINFO* options, void* reply, DWORD) override {
+        hop = options->Ttl - 1;
+        CHECK(attempts[hop] < script.size());
+        const Step& step = script[attempts[hop]++];
+        starts[hop].push_back(clock);
+        clock += step.duration;
+        // Deliberately plausible garbage on zero returns: none may be consumed.
+        ICMPECHO* echo = static_cast<ICMPECHO*>(reply);
+        memset(echo, 0, sizeof(*echo));
+        echo->Address = htonl(0x0a000001 + hop);
+        echo->Status = step.status;
+        echo->RoundTripTime = step.rtt;
+        return ProbeResult{step.count, step.error};
+    }
+    DWORD Wait(HANDLE handle, DWORD timeout) override {
+        // Clobber the ambient error to expose callers that forget captured errors.
+        SetLastError(ERROR_ACCESS_DENIED);
+        if (handle == stopHandle && timeout > 0) {
+            CHECK(hop >= 0);
+            delays[hop].push_back(timeout);
+            if (failTimedWait) return WAIT_FAILED;
+            if (hop == 0 && attempts[hop] == 1) {
+                firstWait.Signal();
+                advance.Await();
+            }
+            if (attempts[hop] < script.size()) {
+                clock += timeout;
+                return WAIT_TIMEOUT;
+            }
+            if (hop == 0) ready.Signal();
+            return WinMTRNetBackend::Wait(handle, INFINITE);
+        }
+        return FakeBackend::Wait(handle, timeout);
+    }
+};
+thread_local int ScriptedBackend::hop = -1;
+thread_local ULONGLONG ScriptedBackend::clock = 0;
+
+static ScriptedBackend::Step Local(DWORD code = IP_GENERAL_FAILURE, DWORD duration = 0)
+{ return {0, code, IP_SUCCESS, duration, 999999}; }
+static ScriptedBackend::Step Timeout(DWORD duration)
+{ return {0, IP_REQ_TIMED_OUT, IP_SUCCESS, duration, 999999}; }
+static ScriptedBackend::Step Reply(DWORD duration = 0, DWORD rtt = 1)
+{ return {1, ERROR_SUCCESS, IP_TTL_EXPIRED_TRANSIT, duration, rtt}; }
+
+static void CheckPacing(const std::vector<ScriptedBackend::Step>& script, double interval,
+                        const std::vector<ULONGLONG>& starts, const std::vector<DWORD>& delays,
+                        WinMTRNet::ProbeOutcome outcome, ULONGLONG initialClock = 0)
+{
+    ScriptedBackend backend;
+    backend.script = script;
+    backend.initialClock = initialClock;
+    std::unique_ptr<WinMTRNet> net(new WinMTRNet(&backend));
+    TraceConfig config = Config();
+    config.interval = interval;
+    CHECK(net->StartTrace(config));
+    backend.ready.Await();
+    net->RequestStop();
+    Finish(*net);
+    CHECK(net->GetStatus().error.empty());
+    CHECK(backend.starts[0] == starts);
+    CHECK(backend.delays[0] == delays);
+    CHECK(net->GetProbeStatus(0).outcome == outcome);
+    CHECK(net->GetXmit(0) == static_cast<int>(script.size()));
+}
+
+static void FailedProbePacing()
+{
+    CheckPacing({Local(), Local(), Local()}, 1, {0, 1000, 2000}, {1000, 1000, 1000}, WinMTRNet::LocalError);
+    CheckPacing({Local(), Local(), Local()}, 0, {0, 100, 200}, {100, 100, 100}, WinMTRNet::LocalError);
+    CheckPacing({Local(IP_NO_RESOURCES, 30), Local()}, .001, {0, 100}, {70, 100}, WinMTRNet::LocalError);
+    CheckPacing({Timeout(5000), Timeout(0)}, 10, {0, 10000}, {5000, 10000}, WinMTRNet::Unanswered);
+    CheckPacing({Timeout(5000), Timeout(0)}, 1, {0, 5000}, {1000}, WinMTRNet::Unanswered);
+}
+static void ReplyAndNetworkErrorPacing()
+{
+    // Duration, not the deliberately different reply RTT, controls scheduling.
+    CheckPacing({Reply(80, 1), Reply()}, .1, {0, 100}, {20, 100}, WinMTRNet::Reply);
+    CheckPacing({Reply(300, 9999), Reply()}, .1, {0, 300}, {100}, WinMTRNet::Reply);
+    CheckPacing({Reply(), Reply()}, 0, {0, 1}, {1, 1}, WinMTRNet::Reply);
+    CheckPacing({Reply(), Reply()}, .0001, {0, 1}, {1, 1}, WinMTRNet::Reply);
+    CheckPacing({Reply(), Reply()}, .0011, {0, 2}, {2, 2}, WinMTRNet::Reply);
+    auto network = Reply();
+    network.status = IP_DEST_HOST_UNREACHABLE;
+    CheckPacing({network, network}, .1, {0, 100}, {100, 100}, WinMTRNet::NetworkError);
+    network.count = 0;
+    network.error = IP_DEST_HOST_UNREACHABLE;
+    CheckPacing({network, network}, .1, {0, 100}, {100, 100}, WinMTRNet::NetworkError);
+    // Unsigned elapsed-time subtraction also survives clock rollover.
+    CheckPacing({Reply(20), Reply()}, .1, {~ULONGLONG(0) - 9, 90}, {80, 100},
+        WinMTRNet::Reply, ~ULONGLONG(0) - 9);
+}
+static void ZeroReplyBufferAndDiagnostics()
+{
+    for (DWORD code : {DWORD(IP_GENERAL_FAILURE), DWORD(IP_REQ_TIMED_OUT), DWORD(ERROR_ACCESS_DENIED), DWORD(0), DWORD(0xfefefefe)}) {
+        ScriptedBackend backend;
+        backend.script = {Local(code)};
+        std::unique_ptr<WinMTRNet> net(new WinMTRNet(&backend));
+        CHECK(net->StartTrace(Config(true)));
+        backend.ready.Await();
+        const auto status = net->GetProbeStatus(0);
+        CHECK(status.code == code);
+        CHECK(status.outcome == (code == IP_REQ_TIMED_OUT ? WinMTRNet::Unanswered : WinMTRNet::LocalError));
+        CHECK(status.message.find(std::to_string(code)) != std::string::npos);
+        CHECK(status.message.size() < 300);
+        CHECK(status.message.find('\n') == std::string::npos);
+        CHECK(net->GetAddr(0) == 0);
+        CHECK(net->GetLast(0) == 0);
+        CHECK(net->GetReturned(0) == 0);
+        CHECK(net->GetXmit(0) == 1);
+        CHECK(net->GetPercent(0) == 100); // preserved attempt-count semantics
+        CHECK(backend.dnsLaunches == 0);
+        CHECK(net->GetStatus().localFailure.empty() == (code == IP_REQ_TIMED_OUT));
+        net->RequestStop();
+        Finish(*net);
+    }
+}
+static void ErrorRecoveryAndHostnamePreservation()
+{
+    ScriptedBackend backend;
+    backend.script = {Local(), Reply()};
+    backend.advance.Reset();
+    std::unique_ptr<WinMTRNet> net(new WinMTRNet(&backend));
+    CHECK(net->StartTrace(Config(true)));
+    backend.firstWait.Await();
+    CHECK(!net->GetStatus().localFailure.empty());
+    backend.advance.Signal();
+    backend.ready.Await();
+    Await([&] { return net->GetStatus().localFailure.empty(); });
+    char name[255];
+    Await([&] { net->GetName(0, name); return std::string(name) == "late-name"; });
+    CHECK(net->GetProbeStatus(0).outcome == WinMTRNet::Reply);
+    CHECK(net->GetProbeStatus(0).message.empty());
+    net->RequestStop();
+    Finish(*net);
+
+    ScriptedBackend laterFailure;
+    laterFailure.script = {Reply(), Local()};
+    std::unique_ptr<WinMTRNet> next(new WinMTRNet(&laterFailure));
+    CHECK(next->StartTrace(Config(true)));
+    laterFailure.ready.Await();
+    Await([&] { next->GetName(0, name); return std::string(name) == "late-name"; });
+    CHECK(!next->GetStatus().localFailure.empty());
+    CHECK(next->GetProbeStatus(0).outcome == WinMTRNet::LocalError);
+    next->RequestStop();
+    Finish(*next);
+}
+static void FatalProbeErrorsAndRestart()
+{
+    for (DWORD code : {DWORD(ERROR_INVALID_HANDLE), DWORD(ERROR_INVALID_PARAMETER),
+            DWORD(ERROR_NOT_SUPPORTED), DWORD(ERROR_INSUFFICIENT_BUFFER), DWORD(IP_BUF_TOO_SMALL)}) {
+        ScriptedBackend backend;
+        backend.script = {Local(code)};
+        std::unique_ptr<WinMTRNet> net(new WinMTRNet(&backend));
+        CHECK(net->StartTrace(Config()));
+        Finish(*net);
+        CHECK(net->GetStatus().phase == WinMTRNet::Idle);
+        CHECK(net->GetStatus().error.find(std::to_string(code)) != std::string::npos);
+        for (int i = 0; i < WinMTRNet::MAX_HOPS; ++i) CHECK(net->GetXmit(i) <= 1);
+        backend.script = {Reply()};
+        for (auto& attempt : backend.attempts) attempt = 0;
+        CHECK(net->StartTrace(Config()));
+        backend.ready.Await();
+        CHECK(net->GetStatus().error.empty());
+        CHECK(net->GetStatus().localFailure.empty());
+        net->RequestStop();
+        Finish(*net);
+    }
+}
+static void FailureWaitCancellationAndError()
+{
+    ScriptedBackend backend;
+    backend.script = {Local()};
+    std::unique_ptr<WinMTRNet> net(new WinMTRNet(&backend));
+    CHECK(net->StartTrace(Config()));
+    backend.ready.Await();
+    net->RequestStop();
+    net->RequestStop();
+    Finish(*net);
+    CHECK(net->GetXmit(0) == 1);
+    CHECK(net->GetStatus().error.empty());
+
+    // Destruction requests cancellation and drains a failed probe's interval.
+    ScriptedBackend closing;
+    closing.script = {Local()};
+    std::unique_ptr<WinMTRNet> closeNet(new WinMTRNet(&closing));
+    CHECK(closeNet->StartTrace(Config()));
+    closing.ready.Await();
+    closeNet.reset();
+    CHECK(closing.shutdowns == 1);
+    CHECK(closing.starts[0].size() == 1);
+
+    ScriptedBackend failedWait;
+    failedWait.script = {Local()};
+    failedWait.failTimedWait = true;
+    std::unique_ptr<WinMTRNet> next(new WinMTRNet(&failedWait));
+    CHECK(next->StartTrace(Config()));
+    Finish(*next);
+    CHECK(next->GetStatus().error == "Unable to wait for probe interval.");
+}
+class RawProbeBackend : public WinMTRNetBackend {
+public:
+    DWORD count = 0;
+protected:
+    DWORD SendProbe(int, void*, WORD, IPINFO*, void*, DWORD) override {
+        SetLastError(IP_REQ_TIMED_OUT);
+        return count;
+    }
+};
+static void ImmediateErrorCapture()
+{
+    RawProbeBackend backend;
+    auto result = backend.Probe(0, NULL, 0, NULL, NULL, 0);
+    SetLastError(ERROR_ACCESS_DENIED);
+    CHECK(result.replyCount == 0);
+    CHECK(result.error == IP_REQ_TIMED_OUT);
+    backend.count = 1;
+    result = backend.Probe(0, NULL, 0, NULL, NULL, 0);
+    CHECK(result.replyCount == 1);
+    CHECK(result.error == ERROR_SUCCESS); // stale last-error ignored on success
+}
+
 static unsigned __stdcall Watchdog(void* argument)
 {
     if (WaitForSingleObject(static_cast<HANDLE>(argument), 30000) != WAIT_OBJECT_0) {
@@ -459,6 +709,13 @@ int main()
     RUN(FailedCompletionPoll);
     RUN(FailedIntervalWait);
     RUN(FailedStopPoll);
+    RUN(ImmediateErrorCapture);
+    RUN(FailedProbePacing);
+    RUN(ReplyAndNetworkErrorPacing);
+    RUN(ZeroReplyBufferAndDiagnostics);
+    RUN(ErrorRecoveryAndHostnamePreservation);
+    RUN(FatalProbeErrorsAndRestart);
+    RUN(FailureWaitCancellationAndError);
     CloseDuringOperation(true, false);
     CloseDuringOperation(false, false);
     CloseDuringOperation(false, true);
@@ -466,6 +723,6 @@ int main()
     done.Signal();
     CHECK(WaitForSingleObject(watchdog, 3000) == WAIT_OBJECT_0);
     CHECK(CloseHandle(watchdog));
-    std::puts("All 18 lifecycle scenarios passed.");
+    std::puts("All lifecycle and probe pacing scenarios passed.");
     return 0;
 }
