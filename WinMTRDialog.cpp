@@ -1200,7 +1200,8 @@ void WinMTRDialog::OnTimer(UINT_PTR nIDEvent)
         } else if (state == TRACING && status.phase == WinMTRNet::Resolving) {
             statusBar.SetPaneText(0, "Resolving destination hostname ...");
         } else if (state == TRACING) {
-            statusBar.SetPaneText(0, "Double click on host name for more information.");
+            statusBar.SetPaneText(0, status.localFailure.empty()
+                ? "Double click on host name for more information." : status.localFailure.c_str());
         }
         if (redraw && (state == TRACING || state == STOPPING)) DisplayRedraw();
     }

@@ -115,7 +115,7 @@ public:
         --active;
         return "late-name";
     }
-    DWORD Probe(int, void*, WORD size, IPINFO*, void* reply, DWORD) override {
+    ProbeResult Probe(int, void*, WORD size, IPINFO*, void* reply, DWORD) override {
         ++active;
         ++probes;
         packetSize = size;
@@ -128,7 +128,7 @@ public:
         echo->Address = htonl(0x0a000001);
         echo->Status = IP_TTL_EXPIRED_TRANSIT;
         echo->RoundTripTime = 1;
-        return 1;
+        return ProbeResult{1, ERROR_SUCCESS};
     }
 };
 
