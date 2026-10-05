@@ -85,8 +85,17 @@ std::string WinMTRNetBackend::ResolveName(int address)
     InetNtopA(AF_INET, &addr.sin_addr, name, sizeof(name));
     return name;
 }
-DWORD WinMTRNetBackend::Probe(int address, void* data, WORD size, IPINFO* options,
-                             void* reply, DWORD replySize)
+ULONGLONG WinMTRNetBackend::NowMilliseconds() { return GetTickCount64(); }
+ProbeResult WinMTRNetBackend::Probe(int address, void* data, WORD size, IPINFO* options,
+                                   void* reply, DWORD replySize)
+{
+    DWORD count = SendProbe(address, data, size, options, reply, replySize);
+    // Capture before waits, locks, formatting, or any other Win32 operation.
+    DWORD error = count == 0 ? GetLastError() : ERROR_SUCCESS;
+    return ProbeResult{count, error};
+}
+DWORD WinMTRNetBackend::SendProbe(int address, void* data, WORD size, IPINFO* options,
+                                 void* reply, DWORD replySize)
 {
     return sendEcho(icmp, address, data, size, options, reply, replySize, ECHO_REPLY_TIMEOUT);
 }
@@ -119,6 +128,7 @@ void WinMTRNet::ResetHops()
 {
     Lock lock(mutex);
     memset(host, 0, sizeof(host));
+    for (int i = 0; i < MAX_HOSTS; ++i) probeStatus[i] = ProbeStatus{NoProbe, 0, ""};
     last_remote_addr = 0;
 }
 void WinMTRNet::Fail(const char* message)
@@ -137,7 +147,22 @@ void WinMTRNet::SetPhase(Phase phase)
 WinMTRNet::Status WinMTRNet::GetStatus()
 {
     Lock lock(mutex);
-    return status;
+    Status snapshot = status;
+    snapshot.localFailure.clear();
+    const int hops = GetMax();
+    for (int i = 0; i < hops; ++i) {
+        if (probeStatus[i].outcome == LocalError) {
+            snapshot.localFailure = "Local probe failure at hop " + std::to_string(i + 1) +
+                ": " + probeStatus[i].message;
+            break;
+        }
+    }
+    return snapshot;
+}
+WinMTRNet::ProbeStatus WinMTRNet::GetProbeStatus(int at)
+{
+    Lock lock(mutex);
+    return probeStatus[at];
 }
 bool WinMTRNet::StartTrace(const TraceConfig& next)
 {
@@ -284,99 +309,120 @@ unsigned __stdcall WinMTRNet::ProbeWorker(void* argument)
     }
     return 0;
 }
+namespace {
+bool NetworkFailure(DWORD code)
+{
+    switch (code) {
+    case IP_DEST_NET_UNREACHABLE: case IP_DEST_HOST_UNREACHABLE:
+    case IP_DEST_PROT_UNREACHABLE: case IP_DEST_PORT_UNREACHABLE:
+    case IP_PACKET_TOO_BIG: case IP_TTL_EXPIRED_TRANSIT:
+    case IP_TTL_EXPIRED_REASSEM: case IP_PARAM_PROBLEM: case IP_SOURCE_QUENCH:
+        return true;
+    default: return false;
+    }
+}
+bool FatalProbeFailure(DWORD code)
+{
+    return code == ERROR_INVALID_HANDLE || code == ERROR_INVALID_PARAMETER ||
+        code == ERROR_NOT_SUPPORTED || code == ERROR_INSUFFICIENT_BUFFER ||
+        code == IP_BUF_TOO_SMALL;
+}
+std::string ProbeMessage(DWORD code)
+{
+    const char* known = NULL;
+    switch (code) {
+    case IP_TTL_EXPIRED_TRANSIT: known = "Time to live expired in transit."; break;
+    case IP_BUF_TOO_SMALL: known = "Reply buffer too small."; break;
+    case IP_DEST_NET_UNREACHABLE: known = "Destination network unreachable."; break;
+    case IP_DEST_HOST_UNREACHABLE: known = "Destination host unreachable."; break;
+    case IP_DEST_PROT_UNREACHABLE: known = "Destination protocol unreachable."; break;
+    case IP_DEST_PORT_UNREACHABLE: known = "Destination port unreachable."; break;
+    case IP_NO_RESOURCES: known = "Insufficient IP resources were available."; break;
+    case IP_BAD_OPTION: known = "Bad IP option was specified."; break;
+    case IP_HW_ERROR: known = "Hardware error occurred."; break;
+    case IP_PACKET_TOO_BIG: known = "Packet was too big."; break;
+    case IP_REQ_TIMED_OUT: known = "Request timed out."; break;
+    case IP_BAD_REQ: known = "Bad request."; break;
+    case IP_BAD_ROUTE: known = "Bad route."; break;
+    case IP_TTL_EXPIRED_REASSEM: known = "The time to live expired during fragment reassembly."; break;
+    case IP_PARAM_PROBLEM: known = "Parameter problem."; break;
+    case IP_SOURCE_QUENCH: known = "Datagrams are arriving too fast to be processed and datagrams may have been discarded."; break;
+    case IP_OPTION_TOO_BIG: known = "An IP option was too big."; break;
+    case IP_BAD_DESTINATION: known = "Bad destination."; break;
+    case IP_GENERAL_FAILURE: known = "General failure."; break;
+    case ERROR_INVALID_HANDLE: known = "Invalid ICMP handle."; break;
+    case ERROR_INVALID_PARAMETER: known = "Invalid ICMP parameters."; break;
+    case ERROR_NOT_SUPPORTED: known = "IPv4 ICMP is not supported."; break;
+    case ERROR_INSUFFICIENT_BUFFER: known = "Reply buffer too small."; break;
+    case ERROR_NOT_ENOUGH_MEMORY: known = "Insufficient memory for ICMP request."; break;
+    default: break;
+    }
+    char message[256] = {};
+    if (!known && code != 0) {
+        FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+            NULL, code, 0, message, sizeof(message), NULL);
+        // System messages commonly end with CR/LF and spaces.
+        size_t length = strlen(message);
+        while (length && (message[length - 1] == '\r' || message[length - 1] == '\n' ||
+                          message[length - 1] == ' ')) message[--length] = 0;
+    }
+    std::string description = known ? known : message;
+    if (description.empty()) description = code == 0
+        ? "ICMP returned no replies without an error code." : "Unknown ICMP error.";
+    return description + " (code " + std::to_string(code) + ")";
+}
+}
+
 void WinMTRNet::ProbeLoop(const Worker& worker)
 {
-    WinMTRNet* wmtrnet = this;
     const int nDataLen = config->packetSize;
     struct ReplyBuffer { ICMPECHO echo; char payload[8192]; };
     std::unique_ptr<char[]> request(new char[nDataLen]);
     std::unique_ptr<ReplyBuffer> reply(new ReplyBuffer);
-    IPINFO stIPInfo = {};
-    stIPInfo.Ttl = static_cast<unsigned char>(worker.index + 1);
-    stIPInfo.Flags = 0x02; // preserve don't-fragment behavior
+    IPINFO options = {};
+    options.Ttl = static_cast<unsigned char>(worker.index + 1);
+    options.Flags = 0x02; // preserve don't-fragment behavior
     memset(request.get(), 32, nDataLen);
+    const DWORD interval = static_cast<DWORD>(std::ceil(config->interval * 1000));
     while (!Stopping()) {
         if (worker.index + 1 > GetMax()) break;
-        DWORD dwReplyCount = backend->Probe(worker.address, request.get(),
-            static_cast<WORD>(nDataLen), &stIPInfo, reply.get(), sizeof(ReplyBuffer));
-        PICMPECHO icmp_echo_reply = &reply->echo;
-        AddXmit(worker.index);
+        const ULONGLONG started = backend->NowMilliseconds();
+        const ProbeResult result = backend->Probe(worker.address, request.get(),
+            static_cast<WORD>(nDataLen), &options, reply.get(), sizeof(ReplyBuffer));
+        AddXmit(worker.index); // Sent retains its existing API-attempt meaning.
         if (Stopping()) break;
-        if (dwReplyCount != 0) {
-			switch(icmp_echo_reply->Status) {
-				case IP_SUCCESS:
-				case IP_TTL_EXPIRED_TRANSIT:
-					wmtrnet->SetLast(worker.index, icmp_echo_reply->RoundTripTime);
-					wmtrnet->SetBest(worker.index, icmp_echo_reply->RoundTripTime);
-					wmtrnet->AddReturned(worker.index);
-					wmtrnet->SetAddr(worker.index, icmp_echo_reply->Address);
-				break;
-				case IP_BUF_TOO_SMALL:
-					wmtrnet->SetName(worker.index, "Reply buffer too small.");
-				break;
-				case IP_DEST_NET_UNREACHABLE:
-					wmtrnet->SetName(worker.index, "Destination network unreachable.");
-				break;
-				case IP_DEST_HOST_UNREACHABLE:
-					wmtrnet->SetName(worker.index, "Destination host unreachable.");
-				break;
-				case IP_DEST_PROT_UNREACHABLE:
-					wmtrnet->SetName(worker.index, "Destination protocol unreachable.");
-				break;
-				case IP_DEST_PORT_UNREACHABLE:
-					wmtrnet->SetName(worker.index, "Destination port unreachable.");
-				break;
-				case IP_NO_RESOURCES:
-					wmtrnet->SetName(worker.index, "Insufficient IP resources were available.");
-				break;
-				case IP_BAD_OPTION:
-					wmtrnet->SetName(worker.index, "Bad IP option was specified.");
-				break;
-				case IP_HW_ERROR:
-					wmtrnet->SetName(worker.index, "Hardware error occurred.");
-				break;
-				case IP_PACKET_TOO_BIG:
-					wmtrnet->SetName(worker.index, "Packet was too big.");
-				break;
-				case IP_REQ_TIMED_OUT:
-					wmtrnet->SetName(worker.index, "Request timed out.");
-				break;
-				case IP_BAD_REQ:
-					wmtrnet->SetName(worker.index, "Bad request.");
-				break;
-				case IP_BAD_ROUTE:
-					wmtrnet->SetName(worker.index, "Bad route.");
-				break;
-				case IP_TTL_EXPIRED_REASSEM:
-					wmtrnet->SetName(worker.index, "The time to live expired during fragment reassembly.");
-				break;
-				case IP_PARAM_PROBLEM:
-					wmtrnet->SetName(worker.index, "Parameter problem.");
-				break;
-				case IP_SOURCE_QUENCH:
-					wmtrnet->SetName(worker.index, "Datagrams are arriving too fast to be processed and datagrams may have been discarded.");
-				break;
-				case IP_OPTION_TOO_BIG:
-					wmtrnet->SetName(worker.index, "An IP option was too big.");
-				break;
-				case IP_BAD_DESTINATION:
-					wmtrnet->SetName(worker.index, "Bad destination.");
-				break;
-				case IP_GENERAL_FAILURE:
-					wmtrnet->SetName(worker.index, "General failure.");
-				break;
-				default:
-					wmtrnet->SetName(worker.index, "General failure.");
-			}
-
-            double delay = config->interval * 1000 - icmp_echo_reply->RoundTripTime;
-            if (delay > 0) {
-                DWORD result = backend->Wait(stopEvent, static_cast<DWORD>(delay));
-                if (result == WAIT_OBJECT_0) break;
-                if (result != WAIT_TIMEOUT) {
-                    Fail("Unable to wait for probe interval.");
-                    break;
-                }
+        // A zero return never makes the reply buffer valid.
+        const DWORD code = result.replyCount ? reply->echo.Status : result.error;
+        ProbeStatus outcome = {LocalError, code, ""};
+        if (result.replyCount && (code == IP_SUCCESS || code == IP_TTL_EXPIRED_TRANSIT)) {
+            outcome.outcome = Reply;
+            SetLast(worker.index, reply->echo.RoundTripTime);
+            SetBest(worker.index, reply->echo.RoundTripTime);
+            AddReturned(worker.index);
+            SetAddr(worker.index, reply->echo.Address);
+        } else {
+            outcome.outcome = code == IP_REQ_TIMED_OUT ? Unanswered :
+                (NetworkFailure(code) ? NetworkError : LocalError);
+            outcome.message = ProbeMessage(code);
+        }
+        {
+            Lock lock(mutex);
+            probeStatus[worker.index] = outcome;
+        }
+        if (outcome.outcome == LocalError && FatalProbeFailure(code)) {
+            Fail(("ICMP probe failed: " + outcome.message).c_str());
+            break;
+        }
+        // Space starts by actual duration, not RTT; no catch-up bursts.
+        DWORD spacing = interval > 0 ? interval : 1;
+        if (outcome.outcome == LocalError && spacing < 100) spacing = 100;
+        const ULONGLONG elapsed = backend->NowMilliseconds() - started;
+        if (elapsed < spacing) {
+            DWORD wait = backend->Wait(stopEvent, spacing - static_cast<DWORD>(elapsed));
+            if (wait == WAIT_OBJECT_0) break;
+            if (wait != WAIT_TIMEOUT) {
+                Fail("Unable to wait for probe interval.");
+                break;
             }
         }
     }

@@ -24,6 +24,8 @@ struct TraceConfig {
     bool useDNS;
 };
 
+struct ProbeResult { DWORD replyCount; DWORD error; };
+
 // Injection seam for deterministic lifecycle tests; production uses Win32.
 class WinMTRNetBackend {
 public:
@@ -36,8 +38,13 @@ public:
     virtual DWORD Wait(HANDLE handle, DWORD timeout);
     virtual bool ResolveDestination(const std::string& destination, int& address);
     virtual std::string ResolveName(int address);
-    virtual DWORD Probe(int address, void* data, WORD size, IPINFO* options,
+    virtual ULONGLONG NowMilliseconds();
+    virtual ProbeResult Probe(int address, void* data, WORD size, IPINFO* options,
                         void* reply, DWORD replySize);
+protected:
+    // Raw API seam also allows testing immediate GetLastError capture.
+    virtual DWORD SendProbe(int address, void* data, WORD size, IPINFO* options,
+                            void* reply, DWORD replySize);
 private:
     typedef HANDLE (WINAPI *CreateFileFn)();
     typedef BOOL (WINAPI *CloseFileFn)(HANDLE);
@@ -65,7 +72,9 @@ class WinMTRNet {
 public:
     enum { MAX_HOSTS = 256, MAX_HOPS = 30 };
     enum Phase { Idle, Resolving, Probing, DrainingProbes, DrainingDNS };
-    struct Status { Phase phase; std::string error; };
+    enum ProbeOutcome { NoProbe, Reply, Unanswered, NetworkError, LocalError };
+    struct ProbeStatus { ProbeOutcome outcome; DWORD code; std::string message; };
+    struct Status { Phase phase; std::string error; std::string localFailure; };
 
     // An injected backend must outlive this object. StartTrace/TryReap are
     // UI-owner operations. Workers only use RequestStop and synchronized getters.
@@ -75,6 +84,7 @@ public:
     void RequestStop();
     bool TryReap(); // true only after workers finish and owned handles are closed
     Status GetStatus();
+    ProbeStatus GetProbeStatus(int at);
 
     int GetAddr(int at);
     int GetName(int at, char* name);
@@ -116,6 +126,7 @@ private:
     HANDLE stopEvent;
     HANDLE dnsThreads[MAX_HOSTS]; // published under mutex; joined after probes
     s_nethost host[MAX_HOSTS];
+    ProbeStatus probeStatus[MAX_HOSTS];
     __int32 last_remote_addr;
     Status status;
 };
